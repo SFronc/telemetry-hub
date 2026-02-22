@@ -5,5 +5,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 public record MessageEnvelope (
         MessageType type,
         String correlationId,
-        JsonNode payload
+        JsonNode payload,
+        String authToken
 ) {}
