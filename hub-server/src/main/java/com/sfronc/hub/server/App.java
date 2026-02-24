@@ -21,7 +21,10 @@ public final class App {
         var ds = DataSourceProvider.h2(cfg.jdbcUrl);
         TelemetryRepository repo = new JdbcTelemetryRepository(ds);
 
-        EventBus bus = SimpleEventBus();
-        var dispatcher = Wirin
+        EventBus bus =  new SimpleEventBus();
+        var dispatcher = Wiring.dispatcher(cfg, repo, bus, metrics);
+
+        var tcp = new TcpServer(cfg, dispatcher, metrics);
+
     }
 }
