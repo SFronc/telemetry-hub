@@ -1,5 +1,6 @@
 package com.sfronc.hub.server.tcp;
 
+import com.sfronc.hub.common.protocol.FrameCodec;
 import com.sfronc.hub.server.AppConfig;
 import com.sfronc.hub.server.dispatch.RequestDispatcher;
 import com.sfronc.hub.server.metrics.MetricsRegistry;
@@ -17,6 +18,7 @@ import java.util.Iterator;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class NioReactor implements Runnable {
@@ -40,6 +42,12 @@ final class NioReactor implements Runnable {
         this.cfg = cfg;
         this.dispatcher = dispatcher;
         this.metrics = metrics;
+    }
+
+    int getBoundPort() { return boundPort; }
+
+    void awaitBound(long time, TimeUnit unit) throws InterruptedException {
+        boundLatch.await(time, unit);
     }
 
     @Override
@@ -100,8 +108,7 @@ final class NioReactor implements Runnable {
         ch.socket().setTcpNoDelay(true);
 
         ConnectionContext ctx = new ConnectionContext(ch, cfg.maxFrameBytes);
-        SelectionKey clientKey = ch.register(selector, SelectionKey.OP_READ, ctx);
-        ctx.key = clientKey;
+        ctx.key = ch.register(selector, SelectionKey.OP_READ, ctx);
 
         metrics.connectionsIncrement();
         log.info("Accepted {}", ch.getRemoteAddress());
@@ -122,16 +129,57 @@ final class NioReactor implements Runnable {
         ioBuf.flip();
         for (byte[] frame: ctx.decoder.feed(ioBuf)) {
             dispatcher.handle(frame)
-                    .thenApply()
+                    .thenApply(FrameCodec::encode)
+                    .whenCompleteAsync((respBuf, ex) -> {
+                        if (ex != null) {
+                            metrics.errorsIncrement();
+                            log.warn("Dispatch error: {}", ex.toString());
+                            return;
+                        }
+                        ctx.enqueue(respBuf);
+                        taskQueue.submit(() -> enableWrite(ctx));
+                        selector.wakeup();
+                    }, worker);
         }
     }
 
     private void onWrite(SelectionKey key) throws IOException {
-        // TODO
+        var ch = (SocketChannel) key.channel();
+        var ctx = (ConnectionContext) key.attachment();
+
+        while (ctx.hasOutbound()) {
+            var buf = ctx.peekOutbound();
+            ch.write(buf);
+            if (buf.hasRemaining()) break;
+            ctx.popOutbound();
+        }
+
+        if (!ctx.hasOutbound()) {
+            key.interestOps(SelectionKey.OP_READ);
+        }
     }
 
     private void closeKey(SelectionKey key) {
-        // TODO
+        try {
+            metrics.connectionsDecrement();
+        }
+        catch (Exception ignored) {}
+
+        try {
+            key.channel().close();
+        }
+        catch (Exception ignored) {}
+
+        try {
+            key.cancel();
+        }
+        catch (Exception ignored) {}
+    }
+
+    private void enableWrite(ConnectionContext ctx) {
+        SelectionKey key = ctx.key;
+        if (key == null || !key.isValid()) return;
+        key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
     }
 
 }

@@ -25,6 +25,17 @@ public final class App {
         var dispatcher = Wiring.dispatcher(cfg, repo, bus, metrics);
 
         var tcp = new TcpServer(cfg, dispatcher, metrics);
+        var http = new HttpApiServer(cfg, repo, metrics);
 
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("Shutdown requested...");
+            try { http.close(); } catch (Exception ignored) {}
+            try { tcp.close(); } catch (Exception ignored) {}
+        }, "shutdown-hook"));
+
+        tcp.start();
+        http.start();
+
+        log.info("TelemetryHub started. TCP:{} HTTP:{} token={}", tcp.getPort(), http.getPort(), cfg.sharedToken);
     }
 }
