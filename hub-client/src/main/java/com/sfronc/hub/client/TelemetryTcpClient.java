@@ -10,6 +10,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.SocketChannel;
 
 public final class TelemetryTcpClient implements Closeable {
@@ -35,6 +36,29 @@ public final class TelemetryTcpClient implements Closeable {
 
         ByteBuffer out = FrameCodec.encode(env);
 
-        // TODO
+        while (out.hasRemaining()) {
+            channel.write(out);
+        }
+
+        ByteBuffer lenBuf = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
+        readFully(lenBuf);
+        lenBuf.flip();
+        int len = lenBuf.getInt();
+
+        ByteBuffer body = ByteBuffer.allocate(len);
+        readFully(body);
+        return FrameCodec.decode(body.array());
+    }
+
+    private void readFully(ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            int n = channel.read(buf);
+            if (n < 0) throw new IOException("Connection closed");
+        }
+    }
+
+    @Override
+    public void close() throws IOException {
+        channel.close();
     }
 }
